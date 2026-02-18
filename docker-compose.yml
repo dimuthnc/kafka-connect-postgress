@@ -1,0 +1,123 @@
+services:
+  # ── Kafka (KRaft mode – no ZooKeeper) ──────────────────────────────
+  kafka:
+    image: apache/kafka:4.1.1
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── One-shot init container – creates the Kafka topic ──────────────
+  kafka-init:
+    image: apache/kafka:4.1.1
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Creating Kafka topic Audit-Records.JSON ..."
+        /opt/kafka/bin/kafka-topics.sh \
+          --create \
+          --topic Audit-Records.JSON \
+          --bootstrap-server kafka:9092 \
+          --partitions 3 \
+          --replication-factor 1 \
+          --if-not-exists
+        echo "Creating Dead Letter Queue topic Audit-Records.DLQ ..."
+        /opt/kafka/bin/kafka-topics.sh \
+          --create \
+          --topic Audit-Records.DLQ \
+          --bootstrap-server kafka:9092 \
+          --partitions 1 \
+          --replication-factor 1 \
+          --if-not-exists
+        echo "Topics created (or already exist)."
+    restart: "no"
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────
+  postgres:
+    image: postgres:14.21-trixie
+    hostname: postgres
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-kafka_sink}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: pg_isready -U ${POSTGRES_USER:-postgres}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka Connect (custom image with JDBC Sink + SMT) ──────────────
+  kafka-connect:
+    build:
+      context: .
+      dockerfile: Dockerfile.connect
+    hostname: kafka-connect
+    container_name: kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    command: /opt/kafka/bin/connect-distributed.sh /opt/kafka/config/connect-distributed.properties
+    volumes:
+      - ./config/connect-distributed.properties:/opt/kafka/config/connect-distributed.properties
+    healthcheck:
+      test: wget -q --spider http://localhost:8083/ || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+  # ── Kafka UI ───────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    hostname: kafka-ui
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: kafka-connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
+
+volumes:
+  kafka-data:
+  postgres-data:

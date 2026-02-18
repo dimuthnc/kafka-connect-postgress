@@ -1,0 +1,33 @@
+{
+  "name": "audit-records-jdbc-sink",
+  "config": {
+    "connector.class": "io.aiven.connect.jdbc.JdbcSinkConnector",
+    "tasks.max": "1",
+    "topics": "Audit-Records.JSON",
+
+    "connection.url": "jdbc:postgresql://postgres:5432/kafka_sink?stringtype=unspecified",
+    "connection.user": "postgres",
+    "connection.password": "postgres",
+
+    "table.name.format": "audit_records",
+    "insert.mode": "upsert",
+    "pk.mode": "record_value",
+    "pk.fields": "messageId",
+    "auto.create": "true",
+    "auto.evolve": "true",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+
+    "transforms": "addSchema",
+    "transforms.addSchema.type": "com.archiver.connect.transforms.AuditRecordSchemaTransform",
+
+    "errors.tolerance": "all",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true",
+    "errors.deadletterqueue.topic.name": "Audit-Records.DLQ",
+    "errors.deadletterqueue.topic.replication.factor": "1",
+    "errors.deadletterqueue.context.headers.enable": "true"
+  }
+}

@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────
+#  Stage 1 – Build the custom SMT JAR and collect PostgreSQL driver
+# ─────────────────────────────────────────────────────────────────────
+FROM maven:3.9-eclipse-temurin-17 AS builder
+
+WORKDIR /build
+COPY kafka-connect-smt/ .
+RUN mvn clean package -DskipTests -q
+
+# ─────────────────────────────────────────────────────────────────────
+#  Stage 2 – Kafka Connect runtime with all plugins
+# ─────────────────────────────────────────────────────────────────────
+FROM apache/kafka:4.1.1
+
+USER root
+
+# Create the plugin directory expected by connect-distributed.properties
+RUN mkdir -p /opt/kafka/plugins/jdbc-sink
+
+# Download Aiven JDBC Connector (compatible with Kafka 4.x)
+RUN cd /opt/kafka/plugins/jdbc-sink && \
+    wget -q https://github.com/Aiven-Open/jdbc-connector-for-apache-kafka/releases/download/v6.10.0/jdbc-connector-for-apache-kafka-6.10.0.zip && \
+    unzip -q jdbc-connector-for-apache-kafka-6.10.0.zip && \
+    mv jdbc-connector-for-apache-kafka-6.10.0/* . && \
+    rm -rf jdbc-connector-for-apache-kafka-6.10.0 jdbc-connector-for-apache-kafka-6.10.0.zip
+
+# Copy the PostgreSQL driver and the custom SMT
+COPY --from=builder /build/target/plugins/         /opt/kafka/plugins/jdbc-sink/
+COPY --from=builder /build/target/audit-record-smt-1.0.0.jar  /opt/kafka/plugins/jdbc-sink/
+
+USER appuser
